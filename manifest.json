@@ -1,0 +1,10 @@
+{
+  "name": "Balatro Poker",
+  "short_name": "Balatro",
+  "description": "8-Card Hand Comparator for custom Balatro-inspired poker",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a1a",
+  "theme_color": "#0a0a1a",
+  "orientation": "portrait"
+}
