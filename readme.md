@@ -36,9 +36,7 @@ Tap cards to build two hands and instantly see who wins. Hand rankings are deter
 
 ### Standard Poker Hands (Extended to 8 Cards)
 - High Card
-- One Pair
-- Two Pairs
-- Three / Four Pairs
+- One / Two / Three / Four Pairs
 - Three of a Kind
 - Straight (5-8 cards)
 - Flush (5-8 cards)
