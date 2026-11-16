@@ -20,139 +20,83 @@ body{background:#0a0a1a;font-family:'Inter','Segoe UI',system-ui,sans-serif;colo
 </head>
 <body>
 <div id="root"><div id="loading"><div class="bar"><div class="fill"></div></div><span>Loading Balatro Poker...</span></div></div>
+<!-- React 18 UMD builds. The service worker (sw.js) caches these for offline use. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script>
-const REACT_URL='https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js';
-const RDOM_URL='https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js';
-const CACHE_NAME='balatro-v30';
-
-async function loadScript(url){
-  if('caches' in window){
-    const cache=await caches.open(CACHE_NAME);
-    let resp=await cache.match(url);
-    if(!resp){resp=await fetch(url);cache.put(url,resp.clone());}
-    const txt=await resp.text();
-    const s=document.createElement('script');s.textContent=txt;document.head.appendChild(s);
-  } else {
-    await new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});
-  }
-}
-
-(async()=>{
-  try{await loadScript(REACT_URL);await loadScript(RDOM_URL);startApp();}
-  catch(err){document.getElementById('loading').innerHTML='<span style="color:#f87171">Failed to load. Check your connection for the first launch.</span>';}
-})();
-
-function startApp(){
-const{useState,useEffect}=React,e=React.createElement;
+// ===== ENGINE:BEGIN =====
+// Hand classification and dealing. Plain functions, no DOM or React.
+// scripts/engine.mjs extracts the text between the ENGINE markers so the
+// offline simulator and the tests run exactly this code.
 const R=13,S=4,HAND=8,TOTAL=108,JK=104;
-const RN=['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
-const SN=['\u2660','\u2665','\u2666','\u2663'];
-const SC=['#c8d0dc','#f87171','#60a5fa','#4ade80'];
-const SBG=['rgba(200,208,220,0.12)','rgba(248,113,113,0.12)','rgba(96,165,250,0.12)','rgba(74,222,128,0.12)'];
-const SUIT_ORDER=[2,3,1,0];
-const NOSUIT=-1;
-const EVEN=new Set([1,3,5,7,9,11]);
-const ODD=new Set([0,2,4,6,8,10,12]);
+const RN=['A','2','3','4','5','6','7','8','9','10','J','Q','K'];   // rank index 0..12
+const NOSUIT=-1;                                                    // suit not entered
+const EVEN=new Set([1,3,5,7,9,11]);                                 // 2,4,6,8,10,Q
+// Straight line positions: 0 = ace low, 1..12 = ranks 2..K, 13 = ace high.
+// POSR maps a position to its rank index. Runs never wrap past the ace.
+const POSR=[0,1,2,3,4,5,6,7,8,9,10,11,12,0];
+// All 24 orderings of the four suits.
 const P24=[];
 (function(){for(let a=0;a<4;a++)for(let b=0;b<4;b++){if(b===a)continue;for(let c=0;c<4;c++){if(c===a||c===b)continue;P24.push([a,b,c,6-a-b-c]);}}})();
+// Rainbow windows: 4 consecutive positions, A-2-3-4 through J-Q-K-A (11 windows).
 const WINS=[];
-for(let s=0;s<10;s++)WINS.push([s,s+1,s+2,s+3]);
-WINS.push([10,11,12,0]);
+for(let s=0;s<=10;s++)WINS.push([s,s+1,s+2,s+3].map(p=>POSR[p]));
+// Window pairs that share no rank; a Double Rainbow needs one of these.
+const WIN_PAIRS=[];
+for(let a=0;a<WINS.length;a++)for(let b=a+1;b<WINS.length;b++)if(!WINS[b].some(r=>WINS[a].includes(r)))WIN_PAIRS.push([a,b]);
 
-function dealRandom(){
-  const d=Array.from({length:TOTAL},(_,i)=>i);
-  for(let i=0;i<HAND;i++){const j=i+Math.floor(Math.random()*(TOTAL-i));[d[i],d[j]]=[d[j],d[i]];}
-  return d.slice(0,HAND).map(c=>c>=JK?{j:true}:{r:Math.floor((c%52)/S),s:c%S});
-}
-
-function classify(cards){
-  let j=0;
-  const rc=new Array(R).fill(0),sc=new Array(S).fill(0);
-  const sr=[new Set(),new Set(),new Set(),new Set()];
-  const rsc=Array.from({length:R},()=>new Array(S).fill(0));
-  const nonJ=[];
-  for(const c of cards){if(c.j){j++;continue;}rc[c.r]++;nonJ.push(c);if(c.s>=0){sc[c.s]++;sr[c.s].add(c.r);rsc[c.r][c.s]++;}}
-
-  function canG(t){const s=[...rc].sort((a,b)=>b-a);let w=j;for(let i=0;i<t.length;i++){const n=Math.max(0,t[i]-(s[i]||0));if(n>w)return false;w-=n;}return true;}
-  const mFl=Math.min(cards.length,Math.max(...sc)+j);
-  function bestRun(rs){const h=new Array(14).fill(false);for(const r of rs)h[r+1]=true;if(rs.has(12))h[0]=true;for(let l=Math.min(8,cards.length);l>=5;l--)for(let st=0;st<=14-l;st++){let g=0;for(let k=0;k<l;k++)if(!h[st+k])g++;if(g<=j)return l;}return 0;}
-  const rSet=new Set();for(let r=0;r<R;r++)if(rc[r]>0)rSet.add(r);
-  const mSt=bestRun(rSet);
-  let mSF=0;for(let s=0;s<S;s++)mSF=Math.max(mSF,bestRun(sr[s]));
-
-  function bestStN(n){const mx=Math.floor(cards.length/n);if(mx<2)return 0;for(let len=mx;len>=2;len--){for(let st=0;st<=R-len;st++){let d=0;for(let k=0;k<len;k++)d+=Math.max(0,n-rc[st+k]);if(d<=j)return len;}if(len<=R){const st=R-len+1;if(st>0){let d=0;for(let k=0;k<len-1;k++)d+=Math.max(0,n-rc[st+k]);d+=Math.max(0,n-rc[0]);if(d<=j)return len;}}}return 0;}
-  const stP=bestStN(2);
-
-  // Twin detection
-  const twinRanks=[];
-  for(let r=0;r<R;r++)for(let s=0;s<S;s++)if(rsc[r][s]>=2)twinRanks.push(r);
-  const twinCount=twinRanks.length;
-  const hasTwins=twinCount>=1;
-  const hasDblTwins=twinCount>=2;
-  const hasTriTwins=twinCount>=3;
-  const hasQuadTwins=twinCount>=4;
-
-  // Rainbow detection
-  const suitsUsed=sc.filter(c=>c>0).length;
-  let hasRainbow=false,hasDblRainbow=false;
-  if(suitsUsed+j>=4){
-    const minJR=WINS.map(w=>{let best=5;for(const p of P24){let n=0;for(let i=0;i<4;i++)if(rsc[w[i]][p[i]]===0)n++;if(n<best)best=n;}return best;});
-    hasRainbow=minJR.some(m=>m<=j);
-    for(let a=0;a<WINS.length&&!hasDblRainbow;a++){if(minJR[a]>j)continue;for(let b=a+1;b<WINS.length&&!hasDblRainbow;b++){if(minJR[b]>j)continue;const sA=new Set(WINS[a]);if(WINS[b].some(r=>sA.has(r)))continue;if(minJR[a]+minJR[b]<=j)hasDblRainbow=true;}}
-  }
-
-  const canFS=sc.every(c=>c<=2)&&sc.reduce((a,c)=>a+Math.max(0,2-c),0)<=j;
-  const allEv=nonJ.length>0&&nonJ.every(c=>EVEN.has(c.r));
-  const allOd=nonJ.length>0&&nonJ.every(c=>ODD.has(c.r));
-
-  // === CLASSIFICATION (rarest first) ===
-  if(canG([8]))return"8 of a Kind";
-  if(mSF>=8)return"8-Card Straight Flush";
-  if(canG([7]))return"7 of a Kind";
-  if(mSF>=7)return"7-Card Straight Flush";
-  if(canG([6,2]))return"6 of a Kind + Pair";
-  if(canG([4,4]))return"Two 4 of a Kinds";
-  if(canG([5,3]))return"5 of a Kind + Trips";
-  if(mSF>=6)return"6-Card Straight Flush";
-  if(canG([6]))return"6 of a Kind";
-  if(canG([5,2]))return"5 of a Kind + Pair";
-  if(canG([5]))return"5 of a Kind";
-  if(mSF>=5)return"5-Card Straight Flush";
-  if(canG([4,3]))return"4 of a Kind + Trips";
-  if(mFl>=8)return"8-Card Flush";
-  if(mSt>=8)return"8-Card Straight";
-  if(hasQuadTwins)return"Quad Twins";
-  if(hasDblRainbow)return"Double Rainbow";
-  if(canG([4,2,2]))return"4 of a Kind + Two Pairs";
-  if(mFl>=7)return"7-Card Flush";
-  if(mSt>=7)return"7-Card Straight";
-  if(canG([4,2]))return"4 of a Kind + Pair";
-  if(hasTriTwins)return"Triple Twins";
-  if(hasDblTwins)return"Double Twins";
-  if(canG([4]))return"4 of a Kind";
-  if(canG([3,3,2]))return"Two Trips + Pair";
-  if(canG([3,3]))return"Two Trips";
-  if(mFl>=6)return"6-Card Flush";
-  if(mSt>=6)return"6-Card Straight";
-  if(canG([3,2,2]))return"Trips + Two Pairs";
-  if(canG([3,2]))return"Full House";
-  if(hasRainbow)return"Rainbow";
-  if(mFl>=5)return"5-Card Flush";
-  if(mSt>=5)return"5-Card Straight";
-  if(canG([3]))return"Three of a Kind";
-  if(stP>=4)return"4-Straight Pairs";
-  if(canG([2,2,2,2]))return"Four Pairs";
-  if(stP>=3)return"3-Straight Pairs";
-  if(canG([2,2,2]))return"Three Pairs";
-  if(stP>=2)return"2-Straight Pairs";
-  if(canG([2,2]))return"Two Pairs";
-  if(hasTwins)return"Twins";
-  if(canG([2]))return"One Pair";
-  if(canFS)return"Full Spectrum";
-  if(allEv)return"All Evens";
-  if(allOd)return"All Odds";
-  return"High Card";
-}
+// Every hand type as [name, kind, parameter]. This is definition order only;
+// the ranking (rarest first) is RANKING in the generated block further down.
+const SPEC=[
+  ["8 of a Kind","group",[8]],
+  ["8-Card Straight Flush","sflush",8],
+  ["7 of a Kind","group",[7]],
+  ["7-Card Straight Flush","sflush",7],
+  ["6 of a Kind + Pair","group",[6,2]],
+  ["Two 4 of a Kinds","group",[4,4]],
+  ["5 of a Kind + Trips","group",[5,3]],
+  ["6-Card Straight Flush","sflush",6],
+  ["6 of a Kind","group",[6]],
+  ["5 of a Kind + Pair","group",[5,2]],
+  ["5 of a Kind","group",[5]],
+  ["5-Card Straight Flush","sflush",5],
+  ["4 of a Kind + Trips","group",[4,3]],
+  ["8-Card Flush","flush",8],
+  ["8-Card Straight","straight",8],
+  ["Quad Twins","twins",4],
+  ["Double Rainbow","rainbow",2],
+  ["4 of a Kind + Two Pairs","group",[4,2,2]],
+  ["7-Card Flush","flush",7],
+  ["7-Card Straight","straight",7],
+  ["4 of a Kind + Pair","group",[4,2]],
+  ["Triple Twins","twins",3],
+  ["Double Twins","twins",2],
+  ["4 of a Kind","group",[4]],
+  ["Two Trips + Pair","group",[3,3,2]],
+  ["Two Trips","group",[3,3]],
+  ["6-Card Flush","flush",6],
+  ["6-Card Straight","straight",6],
+  ["Trips + Two Pairs","group",[3,2,2]],
+  ["Full House","group",[3,2]],
+  ["Rainbow","rainbow",1],
+  ["5-Card Flush","flush",5],
+  ["5-Card Straight","straight",5],
+  ["Three of a Kind","group",[3]],
+  ["4-Straight Pairs","pairs",4],
+  ["Four Pairs","group",[2,2,2,2]],
+  ["3-Straight Pairs","pairs",3],
+  ["Three Pairs","group",[2,2,2]],
+  ["2-Straight Pairs","pairs",2],
+  ["Two Pairs","group",[2,2]],
+  ["Twins","twins",1],
+  ["One Pair","group",[2]],
+  ["Full Spectrum","spectrum",0],
+  ["All Evens","evens",0],
+  ["All Odds","odds",0],
+  ["High Card","high",0]
+];
+const TYPES=SPEC.map(t=>t[0]);
+const TI={};TYPES.forEach((t,i)=>{TI[t]=i;});
 
 const DESCS={
   "8 of a Kind":"All 8 cards same rank",
@@ -160,7 +104,7 @@ const DESCS={
   "7 of a Kind":"7 cards same rank + 1 kicker",
   "7-Card Straight Flush":"7 consecutive suited ranks + kicker",
   "6 of a Kind + Pair":"6 of one rank + 2 of another",
-  "Two 4 of a Kinds":"Two non-consecutive four-of-a-kinds",
+  "Two 4 of a Kinds":"Two four-of-a-kinds",
   "5 of a Kind + Trips":"5 of one rank + 3 of another",
   "6-Card Straight Flush":"6 consecutive suited cards + 2 kickers",
   "6 of a Kind":"6 cards same rank + 2 kickers",
@@ -170,8 +114,8 @@ const DESCS={
   "4 of a Kind + Trips":"4 of one rank + 3 of another + kicker",
   "8-Card Flush":"All 8 cards same suit",
   "8-Card Straight":"8 consecutive ranks, mixed suits",
-  "Quad Twins":"4 twin pairs \u2014 all 8 cards are identical duplicates",
-  "Double Rainbow":"Two separate 4-card straights, each with all 4 suits",
+  "Quad Twins":"4 twin pairs — all 8 cards are identical duplicates",
+  "Double Rainbow":"Two 4-card straights with no rank in common, each with all 4 suits",
   "4 of a Kind + Two Pairs":"Quads + 2 different pairs",
   "7-Card Flush":"7 cards same suit + 1 off-suit",
   "7-Card Straight":"7 consecutive ranks + kicker",
@@ -190,18 +134,337 @@ const DESCS={
   "5-Card Straight":"5 consecutive ranks + 3 kickers",
   "Three of a Kind":"3 cards same rank + 5 kickers",
   "4-Straight Pairs":"4 consecutive pairs",
-  "Four Pairs":"4 non-consecutive pairs",
+  "Four Pairs":"4 pairs",
   "3-Straight Pairs":"3 consecutive pairs + 2 kickers",
-  "Three Pairs":"3 non-consecutive pairs + 2 kickers",
+  "Three Pairs":"3 pairs + 2 kickers",
   "2-Straight Pairs":"2 consecutive pairs + 4 kickers",
-  "Two Pairs":"2 non-consecutive pairs + 4 kickers",
-  "Twins":"Pair of the exact same card \u2014 same rank AND suit",
+  "Two Pairs":"2 pairs + 4 kickers",
+  "Twins":"Pair of the exact same card — same rank AND suit (a joker can copy a card)",
   "One Pair":"1 pair + 6 kickers",
-  "Full Spectrum":"Exactly 2 cards in each suit (\u2660\u2665\u2666\u2663 \u00d7 2)",
+  "Full Spectrum":"Exactly 2 cards in each suit (♠♥♦♣ × 2)",
   "All Evens":"Every card is even-ranked (2, 4, 6, 8, 10, Q)",
   "All Odds":"Every card is odd-ranked (A, 3, 5, 7, 9, J, K)",
   "High Card":"No matching ranks, no straight, no flush, nothing"
 };
+
+// The 108-card shoe: indices 0..103 are two 52-card decks, 104..107 are jokers.
+const CARDS=Array.from({length:TOTAL},(_,i)=>i>=JK?{j:true}:{r:Math.floor((i%52)/S),s:i%S});
+
+// Deal HAND cards uniformly at random. `deck` (a permutation of 0..107) may be
+// reused between calls; a partial Fisher-Yates on any permutation is uniform.
+function dealRandom(rng,deck){
+  rng=rng||Math.random;
+  const d=deck||Array.from({length:TOTAL},(_,i)=>i);
+  const out=new Array(HAND);
+  for(let i=0;i<HAND;i++){const k=i+Math.floor(rng()*(TOTAL-i));const t=d[i];d[i]=d[k];d[k]=t;out[i]=CARDS[d[i]];}
+  return out;
+}
+
+// Longest straight (5..8 cards) from ranks with has[rank]=true, filling up to j gaps with jokers.
+function runLen(has,j,n){
+  for(let l=Math.min(8,n);l>=5;l--)for(let st=0;st+l<=14;st++){let g=0;for(let k=0;k<l;k++)if(!has[POSR[st+k]])g++;if(g<=j)return l;}
+  return 0;
+}
+// Longest run of consecutive pairs (2..4), jokers filling missing cards.
+function pairRunLen(rc,j,n){
+  for(let l=Math.floor(n/2);l>=2;l--)for(let st=0;st+l<=14;st++){let d=0;for(let k=0;k<l;k++){const c=rc[POSR[st+k]];if(c<2)d+=2-c;}if(d<=j)return l;}
+  return 0;
+}
+// Jokers needed to complete each rainbow window (best suit ordering), or null if no rainbow is possible.
+function rainbowNeeds(rsc,sc,j){
+  let used=0;for(const c of sc)if(c>0)used++;
+  if(used+j<4)return null;
+  return WINS.map(w=>{let best=4;for(const p of P24){let m=0;for(let i=0;i<4;i++)if(rsc[w[i]][p[i]]===0)m++;if(m<best)best=m;}return best;});
+}
+
+function handStats(cards){
+  const n=cards.length;let j=0,nat=0,ev=true,od=true;
+  const rc=[0,0,0,0,0,0,0,0,0,0,0,0,0],sc=[0,0,0,0],rsc=[];
+  for(let r=0;r<R;r++)rsc.push([0,0,0,0]);
+  for(const c of cards){
+    if(c.j){j++;continue;}
+    nat++;rc[c.r]++;
+    if(EVEN.has(c.r))od=false;else ev=false;
+    if(c.s>=0){sc[c.s]++;rsc[c.r][c.s]++;}
+  }
+  return{n,j,nat,rc,sc,rsc,allEv:nat>0&&ev,allOd:nat>0&&od};
+}
+
+// For every hand type, whether the hand QUALIFIES for it with jokers played
+// optimally (each joker may be any card). Returns a Uint8Array indexed like
+// TYPES. This never looks at the ranking, so the ranking can be derived from
+// it without circularity.
+function qualifyFlags(cards){
+  const{n,j,rc,sc,rsc,allEv,allOd}=handStats(cards);
+  const sorted=rc.slice().sort((a,b)=>b-a);
+  // Pattern t (sizes, largest first) can be built by pairing it with the largest
+  // rank counts and spending jokers on the shortfall; this pairing is optimal.
+  const canG=t=>{let w=j;for(let i=0;i<t.length;i++){const need=t[i]-sorted[i];if(need>0){if(need>w)return false;w-=need;}}return true;};
+  const mSt=runLen(rc.map(c=>c>0),j,n);
+  let mSF=0;for(let s=0;s<S;s++)mSF=Math.max(mSF,runLen(rsc.map(x=>x[s]>0),j,n));
+  const mFl=Math.min(n,Math.max(...sc)+j);
+  const stP=pairRunLen(rc,j,n);
+  // Twins: identical suited cards. A joker can copy a card held once, and two
+  // leftover jokers can be a twin of any card.
+  let natTw=0,singles=0;
+  for(let r=0;r<R;r++)for(let s=0;s<S;s++){const c=rsc[r][s];if(c>=2)natTw++;else if(c===1)singles++;}
+  const jc=Math.min(j,singles),maxTw=natTw+jc+((j-jc)>>1);
+  const need=rainbowNeeds(rsc,sc,j);
+  let rb=false,drb=false;
+  if(need){rb=need.some(m=>m<=j);drb=WIN_PAIRS.some(([a,b])=>need[a]+need[b]<=j);}
+  let fsNeed=0,fsOk=true;for(const c of sc){if(c>2)fsOk=false;else fsNeed+=2-c;}
+  const canFS=fsOk&&fsNeed<=j;
+  const f=new Uint8Array(SPEC.length);
+  for(let i=0;i<SPEC.length;i++){
+    const k=SPEC[i][1],p=SPEC[i][2];let q;
+    switch(k){
+      case'group':q=canG(p);break;
+      case'straight':q=mSt>=p;break;
+      case'sflush':q=mSF>=p;break;
+      case'flush':q=mFl>=p;break;
+      case'pairs':q=stP>=p;break;
+      case'twins':q=maxTw>=p;break;
+      case'rainbow':q=p===1?rb:drb;break;
+      case'spectrum':q=canFS;break;
+      case'evens':q=allEv;break;
+      case'odds':q=allOd;break;
+      default:q=true;
+    }
+    f[i]=q?1:0;
+  }
+  return f;
+}
+function qualifies(cards){const f=qualifyFlags(cards);return TYPES.filter((_,i)=>f[i]);}
+
+// Position of a type in RANKING (0 = rarest = strongest).
+let RANK_POS=null;
+function rankPos(type){if(!RANK_POS){RANK_POS={};RANKING.forEach((r,i)=>{RANK_POS[r[0]]=i;});}return RANK_POS[type];}
+// A hand is the highest-ranked type it qualifies for.
+function classify(cards){const f=qualifyFlags(cards);for(const r of RANKING)if(f[TI[r[0]]])return r[0];return null;}
+// ---- Tiebreaks --------------------------------------------------------------
+// Two hands of the same type compare a key of card values, high to low:
+// primary group, then secondary groups, then kickers. Ace = 14, except as the
+// bottom of an A-2-3-4-5 run, where the top card is the 5. Suits never break
+// ties. Jokers take whatever cards make the key largest; a joker that is not
+// needed for the hand plays as an ace (as a queen in All Evens).
+// Each key function returns {key, main} (main = number of non-kicker values)
+// or null when the hand does not qualify for that type.
+const val=r=>r===0?14:r+1;
+const byDesc=(a,b)=>b-a;
+const ACE=14;
+function cmpKeys(a,b){
+  const n=Math.max(a.length,b.length);
+  for(let i=0;i<n;i++){const x=i<a.length?a[i]:-1,y=i<b.length?b[i]:-1;if(x!==y)return{cmp:x>y?1:-1,at:i};}
+  return{cmp:0,at:-1};
+}
+function better(cur,cand){if(!cand)return cur;if(!cur)return cand;return cmpKeys(cand.key,cur.key).cmp>0?cand:cur;}
+function kickers(vals,jokers,jv){for(let i=0;i<jokers;i++)vals.push(jv||ACE);return vals.sort(byDesc);}
+
+// Groups of equal rank (pattern sizes largest first). Searching group values
+// from high to low, the first complete assignment is the best key.
+function groupKey(nat,j,pat){
+  const cnt=new Array(15).fill(0);for(const c of nat)cnt[val(c.r)]++;
+  const g=[];let res=null;
+  (function dfs(i,jl){
+    if(i===pat.length){
+      const left=cnt.slice();g.forEach((v,k)=>{left[v]-=Math.min(left[v],pat[k]);});
+      const kick=[];for(let v=ACE;v>=2;v--)for(let c=0;c<left[v];c++)kick.push(v);
+      res={key:g.concat(kickers(kick,jl)),main:pat.length};return;
+    }
+    const hi=i>0&&pat[i]===pat[i-1]?g[i-1]-1:ACE;   // equal-size groups: higher one first
+    for(let v=hi;v>=2&&!res;v--){
+      if(g.includes(v))continue;
+      const need=Math.max(0,pat[i]-cnt[v]);if(need>jl)continue;
+      g.push(v);dfs(i+1,jl-need);g.pop();
+    }
+  })(0,j);
+  return res;
+}
+// N-card straight (suit<0) or straight flush in `suit`: top card, then kickers.
+function runKey(nat,j,N,suit){
+  const inRun=c=>suit<0||c.s===suit;
+  const has=new Array(R).fill(false);for(const c of nat)if(inRun(c))has[c.r]=true;
+  for(let st=14-N;st>=0;st--){
+    let gaps=0;for(let k=0;k<N;k++)if(!has[POSR[st+k]])gaps++;
+    if(gaps>j)continue;
+    const use=new Array(R).fill(0);for(let k=0;k<N;k++){const r=POSR[st+k];if(has[r])use[r]=1;}
+    const kick=[];for(const c of nat){if(use[c.r]&&inRun(c)){use[c.r]=0;continue;}kick.push(val(c.r));}
+    return{key:[st+N].concat(kickers(kick,j-gaps)),main:1};
+  }
+  return null;
+}
+// N-card flush: the N best cards of the suit (jokers are aces of it), then kickers.
+function flushKey(nat,j,N){
+  let best=null;
+  for(let s=0;s<S;s++){
+    const sv=[],ov=[];for(const c of nat)(c.s===s?sv:ov).push(val(c.r));
+    if(sv.length+j<N)continue;
+    const pool=kickers(sv,j);
+    best=better(best,{key:pool.slice(0,N).concat(pool.slice(N).concat(ov).sort(byDesc)),main:N});
+  }
+  return best;
+}
+// L consecutive pairs: top rank of the run, then kickers.
+function pairsKey(nat,j,L){
+  const cnt=new Array(R).fill(0);for(const c of nat)cnt[c.r]++;
+  for(let st=14-L;st>=0;st--){
+    let d=0;for(let k=0;k<L;k++){const c=cnt[POSR[st+k]];if(c<2)d+=2-c;}
+    if(d>j)continue;
+    const take=new Array(R).fill(0);for(let k=0;k<L;k++)take[POSR[st+k]]=2;
+    const kick=[];for(const c of nat){if(take[c.r]>0){take[c.r]--;continue;}kick.push(val(c.r));}
+    return{key:[st+L].concat(kickers(kick,j-d)),main:1};
+  }
+  return null;
+}
+// Rainbow: top card of the best window, then kickers (best suit ordering).
+function rainbowKey(nat,j,rsc){
+  for(let w=WINS.length-1;w>=0;w--){
+    let best=null;
+    for(const p of P24){
+      let miss=0;const used=new Array(R*S).fill(0);
+      for(let i=0;i<4;i++){if(rsc[WINS[w][i]][p[i]]>0)used[WINS[w][i]*S+p[i]]=1;else miss++;}
+      if(miss>j)continue;
+      const kick=[];for(const c of nat){const f=c.s>=0?c.r*S+c.s:-1;if(f>=0&&used[f]){used[f]=0;continue;}kick.push(val(c.r));}
+      best=better(best,{key:[w+4].concat(kickers(kick,j-miss)),main:1});
+    }
+    if(best)return best;
+  }
+  return null;
+}
+// Double Rainbow: higher rainbow's top card, then the lower one's. The two
+// rainbows use all 8 cards, so there are no kickers.
+function dblRainbowKey(j,rsc,sc){
+  const need=rainbowNeeds(rsc,sc,j);if(!need)return null;
+  let best=null;
+  for(const[a,b]of WIN_PAIRS)if(need[a]+need[b]<=j)best=better(best,{key:[Math.max(a,b)+4,Math.min(a,b)+4],main:2});
+  return best;
+}
+// k twins: twin ranks high to low, then kickers. A twin is a natural pair of
+// identical cards, a joker copying a card held once, or two jokers (aces).
+function twinsKey(nat,j,k){
+  const fc=new Map();for(const c of nat)if(c.s>=0){const f=c.r*S+c.s;fc.set(f,(fc.get(f)||0)+1);}
+  const cand=[];
+  for(const[f,c]of fc)cand.push({f,v:val(Math.floor(f/S)),cost:c>=2?0:1,use:c>=2?2:1});
+  for(let q=0;q<j>>1;q++)cand.push({f:-1,v:ACE,cost:2,use:0});
+  let best=null;const pick=[];
+  (function rec(from,cost){
+    if(pick.length===k){
+      const tw=pick.map(x=>x.v).sort(byDesc);
+      const rm=new Map();for(const x of pick)if(x.f>=0)rm.set(x.f,x.use);
+      const kick=[];for(const c of nat){const f=c.s>=0?c.r*S+c.s:-1;if(rm.get(f)>0){rm.set(f,rm.get(f)-1);continue;}kick.push(val(c.r));}
+      best=better(best,{key:tw.concat(kickers(kick,j-cost)),main:k});return;
+    }
+    for(let i=from;i<cand.length;i++){if(cost+cand[i].cost>j)continue;pick.push(cand[i]);rec(i+1,cost+cand[i].cost);pick.pop();}
+  })(0,0);
+  return best;
+}
+
+// Tiebreak key for `cards` played as `type`, or null if it does not qualify.
+function tiebreakKey(cards,type){
+  const i=TI[type],kind=SPEC[i][1],p=SPEC[i][2];
+  const nat=cards.filter(c=>!c.j),j=cards.length-nat.length;
+  switch(kind){
+    case'group':return groupKey(nat,j,p);
+    case'straight':return runKey(nat,j,p,-1);
+    case'sflush':{let b=null;for(let s=0;s<S;s++)b=better(b,runKey(nat,j,p,s));return b;}
+    case'flush':return flushKey(nat,j,p);
+    case'pairs':return pairsKey(nat,j,p);
+    case'twins':return twinsKey(nat,j,p);
+    case'rainbow':{const st=handStats(cards);return p===1?rainbowKey(nat,j,st.rsc):dblRainbowKey(j,st.rsc,st.sc);}
+    default:{ // Full Spectrum, All Evens, All Odds, High Card: every card, high to low
+      if(!qualifyFlags(cards)[i])return null;
+      return{key:kickers(nat.map(c=>val(c.r)),j,kind==='evens'?12:ACE),main:cards.length};
+    }
+  }
+}
+function valueName(v){return v===14?'A':v===13?'K':v===12?'Q':v===11?'J':String(v);}
+// What position `at` of a key means, for the result message.
+function keyLabel(type,at,main){
+  const kind=SPEC[TI[type]][1];
+  if(at>=main)return'kicker';
+  switch(kind){
+    case'group':return['primary group','secondary group','third group','fourth group'][at];
+    case'flush':return'flush cards';
+    case'twins':return'twins';
+    case'rainbow':return SPEC[TI[type]][2]===2?(at===0?'higher rainbow':'lower rainbow'):'top card';
+    case'straight':case'sflush':case'pairs':return'top card';
+    default:return'cards';
+  }
+}
+// Showdown. winner: 1 or 2, or 0 for a split pot.
+function compareHands(a,b){
+  const typeA=classify(a),typeB=classify(b),rankA=rankPos(typeA),rankB=rankPos(typeB);
+  if(rankA!==rankB)return{winner:rankA<rankB?1:2,typeA,typeB,rankA,rankB,keyA:null,keyB:null,at:-1,label:null};
+  const ka=tiebreakKey(a,typeA),kb=tiebreakKey(b,typeB),c=cmpKeys(ka.key,kb.key);
+  return{winner:c.cmp>0?1:c.cmp<0?2:0,typeA,typeB,rankA,rankB,keyA:ka.key,keyB:kb.key,at:c.at,label:c.at>=0?keyLabel(typeA,c.at,ka.main):null};
+}
+// ===== ENGINE:END =====
+
+// ===== RANKINGS:BEGIN (generated by `node scripts/simulate.mjs --write`; do not edit by hand) =====
+// 44 types: exact counts over all C(108,8) = 352,025,629,371 deals.
+// Double Rainbow, Rainbow: 200,000,000-deal simulation, seed 1.
+const RANKING_META={deals:200000000,seed:1,exactTypes:44,simTypes:["Double Rainbow","Rainbow"]};
+// [name, probability that a random 8-card deal qualifies, source], rarest first.
+const RANKING=[
+  ["8 of a Kind",1.827992e-8,"exact"],
+  ["8-Card Straight Flush",0.000001420987,"exact"],
+  ["7 of a Kind",0.000002826075,"exact"],
+  ["6 of a Kind + Pair",0.00001408795,"exact"],
+  ["Two 4 of a Kinds",0.00002156181,"exact"],
+  ["5 of a Kind + Trips",0.0000258447,"exact"],
+  ["7-Card Straight Flush",0.00005144244,"exact"],
+  ["8-Card Flush",0.00006650567,"exact"],
+  ["6 of a Kind",0.000158251,"exact"],
+  ["4-Straight Pairs",0.0001913375,"exact"],
+  ["Quad Twins",0.0002495053,"exact"],
+  ["Double Rainbow",0.00046455,"sim"],
+  ["6-Card Straight Flush",0.0009001834,"exact"],
+  ["5 of a Kind + Pair",0.0009612793,"exact"],
+  ["4 of a Kind + Trips",0.001262984,"exact"],
+  ["Two Trips + Pair",0.00146831,"exact"],
+  ["4 of a Kind + Two Pairs",0.001516755,"exact"],
+  ["7-Card Flush",0.001870833,"exact"],
+  ["All Evens",0.002137737,"exact"],
+  ["8-Card Straight",0.002315468,"exact"],
+  ["5 of a Kind",0.004235199,"exact"],
+  ["All Odds",0.00726828,"exact"],
+  ["Triple Twins",0.007396125,"exact"],
+  ["5-Card Straight Flush",0.009838208,"exact"],
+  ["Four Pairs",0.01127129,"exact"],
+  ["3-Straight Pairs",0.01652016,"exact"],
+  ["7-Card Straight",0.016527,"exact"],
+  ["Two Trips",0.01978227,"exact"],
+  ["4 of a Kind + Pair",0.02157504,"exact"],
+  ["6-Card Flush",0.02213013,"exact"],
+  ["Trips + Two Pairs",0.03157162,"exact"],
+  ["4 of a Kind",0.05688362,"exact"],
+  ["6-Card Straight",0.06580759,"exact"],
+  ["Full Spectrum",0.0825464,"exact"],
+  ["Double Twins",0.08789896,"exact"],
+  ["5-Card Flush",0.1441154,"exact"],
+  ["Three Pairs",0.1559438,"exact"],
+  ["Full House",0.185736,"exact"],
+  ["5-Card Straight",0.1898145,"exact"],
+  ["Rainbow",0.20732,"sim"],
+  ["2-Straight Pairs",0.2466884,"exact"],
+  ["Three of a Kind",0.359892,"exact"],
+  ["Twins",0.4527394,"exact"],
+  ["Two Pairs",0.5881623,"exact"],
+  ["One Pair",0.9386628,"exact"],
+  ["High Card",1,"exact"]
+];
+// ===== RANKINGS:END =====
+
+function startApp(){
+const{useState,useEffect}=React,e=React.createElement;
+const SN=['♠','♥','♦','♣'];
+const SC=['#c8d0dc','#f87171','#60a5fa','#4ade80'];
+const SBG=['rgba(200,208,220,0.12)','rgba(248,113,113,0.12)','rgba(96,165,250,0.12)','rgba(74,222,128,0.12)'];
+const SUIT_ORDER=[2,3,1,0];
+const ORDER=RANKING.map(r=>r[0]);
+const PROB={};RANKING.forEach(r=>{PROB[r[0]]=r[1];});
+const fmtPct=p=>{const x=p*100;return x<0.001?x.toExponential(1):x<0.1?x.toFixed(3):x<1?x.toFixed(2):x.toFixed(1);};
+const fmtOdds=p=>'1 in '+Math.round(1/p).toLocaleString();
 
 const tierCfg=[{pct:0.12,bg:'rgba(147,51,234,0.15)',border:'#a855f7',label:'Legendary',color:'#c084fc',glow:'0 0 12px rgba(168,85,247,0.3)'},{pct:0.28,bg:'rgba(59,130,246,0.12)',border:'#3b82f6',label:'Epic',color:'#60a5fa',glow:'0 0 8px rgba(59,130,246,0.2)'},{pct:0.5,bg:'rgba(34,197,94,0.1)',border:'#22c55e',label:'Rare',color:'#4ade80',glow:'none'},{pct:0.75,bg:'rgba(234,179,8,0.08)',border:'#eab308',label:'Uncommon',color:'#facc15',glow:'none'},{pct:1.01,bg:'rgba(100,116,139,0.08)',border:'#64748b',label:'Common',color:'#94a3b8',glow:'none'}];
 function getTier(i,total){const p=i/total;return tierCfg.find(t=>p<t.pct)||tierCfg[4];}
@@ -211,17 +474,17 @@ function CB({label,color,bg,active,onClick,small}){
 }
 
 function MC({card,onRemove}){
-  if(card.j)return e('div',{onClick:onRemove,style:{display:'inline-flex',alignItems:'center',justifyContent:'center',background:'linear-gradient(135deg,#7c3aed,#2563eb)',border:'1.5px solid #a78bfa',borderRadius:6,width:38,height:50,cursor:'pointer',fontSize:11,fontWeight:900,color:'#e9d5ff',flexDirection:'column',lineHeight:1}},e('span',{style:{fontSize:16}},'\u2605'),e('span',null,'JKR'));
+  if(card.j)return e('div',{onClick:onRemove,style:{display:'inline-flex',alignItems:'center',justifyContent:'center',background:'linear-gradient(135deg,#7c3aed,#2563eb)',border:'1.5px solid #a78bfa',borderRadius:6,width:38,height:50,cursor:'pointer',fontSize:11,fontWeight:900,color:'#e9d5ff',flexDirection:'column',lineHeight:1}},e('span',{style:{fontSize:16}},'★'),e('span',null,'JKR'));
   const hasS=card.s>=0,col=hasS?SC[card.s]:'#94a3b8';
   return e('div',{onClick:onRemove,style:{display:'inline-flex',alignItems:'center',justifyContent:'center',flexDirection:'column',background:'rgba(15,15,35,0.8)',border:'1.5px solid '+col+'44',borderRadius:6,width:38,height:50,cursor:'pointer',lineHeight:1}},e('span',{style:{fontSize:14,fontWeight:800,color:col}},RN[card.r]),e('span',{style:{fontSize:hasS?13:9,color:col,opacity:0.8}},hasS?SN[card.s]:'ANY'));
 }
 
-function PP({name,color,hand,setHand,handName,prob,handOrder}){
+function PP({name,color,hand,setHand,handName}){
   const[suit,setSuit]=useState(NOSUIT);
   const add=card=>{if(hand.length<8)setHand([...hand,card]);};
   const rm=i=>setHand(hand.filter((_,idx)=>idx!==i));
-  const rank=handName&&handOrder?handOrder.indexOf(handName):-1;
-  const tc=!handName?'#475569':rank>=0&&rank<handOrder.length*0.15?'#c084fc':rank<handOrder.length*0.35?'#60a5fa':rank<handOrder.length*0.6?'#4ade80':'#facc15';
+  const total=ORDER.length,rank=handName?rankPos(handName):-1,prob=handName?PROB[handName]:0;
+  const tc=!handName?'#475569':rank<total*0.15?'#c084fc':rank<total*0.35?'#60a5fa':rank<total*0.6?'#4ade80':'#facc15';
   const sCol=suit<0?'#94a3b8':SC[suit];
   return e('div',{style:{background:'rgba(15,15,40,0.5)',border:'1px solid '+color+'22',borderRadius:12,padding:'14px 14px 16px'}},
     e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
@@ -234,82 +497,80 @@ function PP({name,color,hand,setHand,handName,prob,handOrder}){
       ...SUIT_ORDER.map(i=>e(CB,{key:i,label:SN[i],color:SC[i],bg:SBG[i],active:suit===i,onClick:()=>setSuit(suit===i?NOSUIT:i),small:true}))),
     e('div',{style:{display:'flex',flexWrap:'wrap',gap:3,marginBottom:10}},
       ...RN.map((r,i)=>e(CB,{key:i,label:e(React.Fragment,null,e('span',null,r),e('span',{style:{fontSize:9,display:'block',opacity:0.7}},suit<0?'any':SN[suit])),color:sCol,bg:suit<0?'rgba(148,163,184,0.1)':SBG[suit],active:false,onClick:()=>add({r:i,s:suit}),small:true})),
-      e(CB,{label:e(React.Fragment,null,e('span',null,'\u2605'),e('span',{style:{fontSize:9,display:'block'}},'JKR')),color:'#a78bfa',bg:'rgba(124,58,237,0.15)',active:false,onClick:()=>add({j:true}),small:true})),
+      e(CB,{label:e(React.Fragment,null,e('span',null,'★'),e('span',{style:{fontSize:9,display:'block'}},'JKR')),color:'#a78bfa',bg:'rgba(124,58,237,0.15)',active:false,onClick:()=>add({j:true}),small:true})),
     e('div',{style:{minHeight:58,background:'rgba(5,5,20,0.5)',borderRadius:8,border:'1px solid #1e293b',padding:'8px',display:'flex',gap:4,flexWrap:'wrap',alignItems:'center',justifyContent:hand.length?'flex-start':'center'}},
       hand.length===0?e('span',{style:{color:'#334155',fontSize:12,fontStyle:'italic'}},'Tap cards above to build a hand'):hand.map((c,i)=>e(MC,{key:i,card:c,onRemove:()=>rm(i)}))),
     hand.length>0&&e('div',{style:{marginTop:10,textAlign:'center'}},
       e('div',{style:{fontSize:18,fontWeight:900,color:tc,textShadow:'0 0 20px '+tc+'33'}},handName),
-      prob&&e('div',{style:{fontSize:12,color:'#94a3b8',marginTop:2}},(prob.pct<0.001?prob.pct.toExponential(1):prob.pct<0.1?prob.pct.toFixed(3):prob.pct<1?prob.pct.toFixed(2):prob.pct.toFixed(1))+'% chance',e('span',{style:{color:'#475569'}},' \u00b7 1 in '+prob.odds.toLocaleString())),
-      !prob&&e('div',{style:{fontSize:11,color:'#475569',marginTop:2}},'Extremely rare \u2014 not seen in simulation'),
-      rank>=0&&e('div',{style:{fontSize:10,color:'#334155',marginTop:2}},'Rank #'+(rank+1)+' of '+handOrder.length)));
+      e('div',{style:{fontSize:12,color:'#94a3b8',marginTop:2}},fmtPct(prob)+'% chance',e('span',{style:{color:'#475569'}},' · '+fmtOdds(prob))),
+      e('div',{style:{fontSize:10,color:'#334155',marginTop:2}},'Rank #'+(rank+1)+' of '+total)));
 }
 
 function App(){
   const[h1,setH1]=useState([]),[h2,setH2]=useState([]);
-  const[pm,setPm]=useState(null),[ho,setHo]=useState([]);
-  const[prog,setProg]=useState(0),[run,setRun]=useState(true);
-  const[showR,setShowR]=useState(false),[exp,setExp]=useState(null);
-
+  const[showR,setShowR]=useState(false),[exp,setExp]=useState(null),[ver,setVer]=useState(null);
+  // The version lives only in sw.js; ask the active worker for it.
   useEffect(()=>{
-    const ct={};const it=500000;const b=5000;let d=0;
-    function step(){const end=Math.min(d+b,it);for(let i=d;i<end;i++){const nm=classify(dealRandom());ct[nm]=(ct[nm]||0)+1;}d=end;setProg(Math.floor(d/it*100));if(d<it)setTimeout(step,0);else{const m={};const sorted=Object.entries(ct).sort((a,b)=>a[1]-b[1]);const order=sorted.map(([nm])=>nm);for(const[nm,c]of sorted)m[nm]={pct:c/it*100,odds:Math.round(it/c)};setPm(m);setHo(order);setRun(false);}}
-    setTimeout(step,0);
+    const sw=navigator.serviceWorker;if(!sw)return;
+    const onMsg=ev=>{if(ev.data&&ev.data.type==='VERSION')setVer(ev.data.version);};
+    sw.addEventListener('message',onMsg);sw.startMessages();
+    sw.ready.then(reg=>{if(reg.active)reg.active.postMessage({type:'GET_VERSION'});});
+    return()=>sw.removeEventListener('message',onMsg);
   },[]);
 
   const n1=h1.length>0?classify(h1):null,n2=h2.length>0?classify(h2):null;
-  const p1=n1&&pm?pm[n1]:null,p2=n2&&pm?pm[n2]:null;
-  const r1=n1?ho.indexOf(n1):-1,r2=n2?ho.indexOf(n2):-1;
-  let w=null,wm='';
-  if(n1&&n2&&ho.length>0){
-    if(r1<r2&&r1>=0){w=1;wm='Player 1 wins!';}
-    else if(r2<r1&&r2>=0){w=2;wm='Player 2 wins!';}
-    else if(r1===r2){w=0;wm='Same hand type \u2014 compare kickers!';}
-    else if(r1<0&&r2>=0){w=1;wm='Player 1 wins! (rarer hand)';}
-    else if(r2<0&&r1>=0){w=2;wm='Player 2 wins! (rarer hand)';}
-    else{w=0;wm='Both extremely rare \u2014 compare kickers!';}}
+  const r1=n1?rankPos(n1):-1,r2=n2?rankPos(n2):-1;
+  let w=null,wm='',wd='';
+  if(n1&&n2){
+    const res=compareHands(h1,h2);w=res.winner;
+    if(r1!==r2){wm='Player '+w+' wins!';wd=n1+' (#'+(r1+1)+') vs '+n2+' (#'+(r2+1)+')';}
+    else if(w===0){wm='Split pot';wd='Both have '+n1+' with identical ranks';}
+    else{const kw=w===1?res.keyA:res.keyB,kl=w===1?res.keyB:res.keyA,x=kw[res.at],y=kl[res.at];
+      wm='Player '+w+' wins on tiebreak';
+      wd='Both have '+n1+': '+valueName(x)+(y>=0?' beats '+valueName(y):' beats no card')+' ('+res.label+')';}
+    if(h1.length<HAND||h2.length<HAND)wd+=' · hands not complete';}
 
   return e('div',{style:{background:'#0a0a1a',color:'#e2e8f0',minHeight:'100vh',fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",padding:'20px 12px'}},
     e('div',{style:{maxWidth:480,margin:'0 auto'}},
       e('div',{style:{textAlign:'center',marginBottom:20}},
         e('div',{style:{fontSize:10,letterSpacing:4,color:'#64748b',textTransform:'uppercase',marginBottom:3}},'Hand Comparator'),
         e('h1',{style:{fontSize:26,fontWeight:900,margin:0,background:'linear-gradient(135deg,#c084fc,#38bdf8,#4ade80)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}},'BALATRO POKER'),
-        e('p',{style:{color:'#64748b',margin:'4px 0 0',fontSize:11}},'2\u00d754 Decks \u00b7 4 Jokers (Wild) \u00b7 8-Card Hands')),
-      run&&e('div',{style:{textAlign:'center',marginBottom:16}},
-        e('div',{style:{width:200,height:4,background:'#1e1e3a',borderRadius:3,margin:'0 auto 6px',overflow:'hidden'}},
-          e('div',{style:{width:prog+'%',height:'100%',background:'linear-gradient(90deg,#a855f7,#38bdf8)',borderRadius:3,transition:'width 0.15s'}})),
-        e('div',{style:{color:'#475569',fontSize:11}},'Computing probabilities '+prog+'%...')),
-      e(PP,{name:'PLAYER 1',color:'#a78bfa',hand:h1,setHand:setH1,handName:n1,prob:p1,handOrder:ho}),
+        e('p',{style:{color:'#64748b',margin:'4px 0 0',fontSize:11}},'2×54 Decks · 4 Jokers (Wild) · 8-Card Hands')),
+      e(PP,{name:'PLAYER 1',color:'#a78bfa',hand:h1,setHand:setH1,handName:n1}),
       e('div',{style:{textAlign:'center',padding:'12px 0'}},
         w===null?e('div',{style:{fontSize:20,fontWeight:900,color:'#1e293b'}},'VS'):
         e('div',{style:{background:w===0?'rgba(234,179,8,0.1)':w===1?'rgba(168,85,247,0.12)':'rgba(56,189,248,0.12)',border:'1px solid '+(w===0?'#eab30833':w===1?'#a855f733':'#38bdf833'),borderRadius:10,padding:'10px 16px',display:'inline-block'}},
           e('div',{style:{fontSize:16,fontWeight:900,color:w===0?'#facc15':w===1?'#c084fc':'#38bdf8'}},wm),
-          w!==0&&e('div',{style:{fontSize:11,color:'#64748b',marginTop:2}},n1+' (#'+(r1>=0?r1+1:'??')+') vs '+n2+' (#'+(r2>=0?r2+1:'??')+')'),
-          w===0&&e('div',{style:{fontSize:11,color:'#64748b',marginTop:2}},'Both have '+n1+' \u2014 compare highest ranks, then kickers'))),
-      e(PP,{name:'PLAYER 2',color:'#38bdf8',hand:h2,setHand:setH2,handName:n2,prob:p2,handOrder:ho}),
-      !run&&ho.length>0&&e(React.Fragment,null,
-        e('button',{onClick:()=>setShowR(!showR),style:{display:'block',margin:'20px auto 0',background:'rgba(30,30,60,0.6)',border:'1px solid #1e293b',color:'#94a3b8',borderRadius:8,padding:'9px 20px',cursor:'pointer',fontSize:12,fontWeight:600}},(showR?'Hide':'Show')+' Full Rankings ('+ho.length+' hands)'),
-        showR&&e('div',{style:{marginTop:12}},
-          e('div',{style:{display:'flex',gap:6,justifyContent:'center',marginBottom:10,flexWrap:'wrap'}},...tierCfg.map(t=>e('span',{key:t.label,style:{fontSize:10,color:t.color,background:t.bg,border:'1px solid '+t.border+'33',borderRadius:4,padding:'2px 8px'}},t.label))),
-          ...ho.map((nm,i)=>{const tier=getTier(i,ho.length);const p=pm[nm];const isO=exp===nm;
-            return e('div',{key:nm,onClick:()=>setExp(isO?null:nm),style:{display:'flex',alignItems:'center',gap:8,background:tier.bg,border:'1px solid '+tier.border+'22',borderLeft:'3px solid '+tier.border,borderRadius:8,padding:'9px 12px',marginBottom:4,cursor:'pointer',boxShadow:tier.glow}},
-              e('div',{style:{fontSize:15,fontWeight:900,color:tier.color,minWidth:26,textAlign:'center'}},i+1),
-              e('div',{style:{flex:1,minWidth:0}},e('div',{style:{fontWeight:700,fontSize:13,color:'#f1f5f9'}},nm),isO&&DESCS[nm]&&e('div',{style:{fontSize:11,color:'#94a3b8',marginTop:2,lineHeight:1.4}},DESCS[nm]),!isO&&e('div',{style:{fontSize:10,color:tier.color,opacity:0.7,marginTop:1}},tier.label)),
-              e('div',{style:{textAlign:'right',flexShrink:0}},e('div',{style:{fontSize:14,fontWeight:800,color:tier.color}},(p.pct<0.001?p.pct.toExponential(1):p.pct<0.1?p.pct.toFixed(3):p.pct<1?p.pct.toFixed(2):p.pct.toFixed(1))+'%'),e('div',{style:{fontSize:10,color:'#64748b'}},'1 in '+p.odds.toLocaleString())));}))),
+          e('div',{style:{fontSize:11,color:'#64748b',marginTop:2}},wd))),
+      e(PP,{name:'PLAYER 2',color:'#38bdf8',hand:h2,setHand:setH2,handName:n2}),
+      e('button',{onClick:()=>setShowR(!showR),style:{display:'block',margin:'20px auto 0',background:'rgba(30,30,60,0.6)',border:'1px solid #1e293b',color:'#94a3b8',borderRadius:8,padding:'9px 20px',cursor:'pointer',fontSize:12,fontWeight:600}},(showR?'Hide':'Show')+' Full Rankings ('+ORDER.length+' hands)'),
+      showR&&e('div',{style:{marginTop:12}},
+        e('div',{style:{display:'flex',gap:6,justifyContent:'center',marginBottom:10,flexWrap:'wrap'}},...tierCfg.map(t=>e('span',{key:t.label,style:{fontSize:10,color:t.color,background:t.bg,border:'1px solid '+t.border+'33',borderRadius:4,padding:'2px 8px'}},t.label))),
+        e('div',{style:{fontSize:10,color:'#64748b',textAlign:'center',marginBottom:10,lineHeight:1.5}},'Chance that a random 8-card deal contains each hand (jokers wild). A hand counts as the highest-ranked type it contains.'),
+        ...ORDER.map((nm,i)=>{const tier=getTier(i,ORDER.length);const p=PROB[nm];const isO=exp===nm;
+          return e('div',{key:nm,onClick:()=>setExp(isO?null:nm),style:{display:'flex',alignItems:'center',gap:8,background:tier.bg,border:'1px solid '+tier.border+'22',borderLeft:'3px solid '+tier.border,borderRadius:8,padding:'9px 12px',marginBottom:4,cursor:'pointer',boxShadow:tier.glow}},
+            e('div',{style:{fontSize:15,fontWeight:900,color:tier.color,minWidth:26,textAlign:'center'}},i+1),
+            e('div',{style:{flex:1,minWidth:0}},e('div',{style:{fontWeight:700,fontSize:13,color:'#f1f5f9'}},nm),isO&&DESCS[nm]&&e('div',{style:{fontSize:11,color:'#94a3b8',marginTop:2,lineHeight:1.4}},DESCS[nm]),!isO&&e('div',{style:{fontSize:10,color:tier.color,opacity:0.7,marginTop:1}},tier.label)),
+            e('div',{style:{textAlign:'right',flexShrink:0}},e('div',{style:{fontSize:14,fontWeight:800,color:tier.color}},fmtPct(p)+'%'),e('div',{style:{fontSize:10,color:'#64748b'}},fmtOdds(p))));})),
       e('div',{style:{background:'rgba(30,30,60,0.5)',border:'1px solid #1e293b',borderRadius:10,padding:'12px 16px',marginTop:16,fontSize:11,color:'#94a3b8',lineHeight:1.6}},
         e('strong',{style:{color:'#c084fc'}},'Custom hands:'),e('br'),
-        e('strong',{style:{color:'#e2e8f0'}},'Rainbow'),' \u2014 4-card straight, each card a different suit',e('br'),
-        e('strong',{style:{color:'#e2e8f0'}},'Double Rainbow'),' \u2014 two separate rainbows in one hand',e('br'),
-        e('strong',{style:{color:'#e2e8f0'}},'Twins'),' / ',e('strong',{style:{color:'#e2e8f0'}},'Double'),' / ',e('strong',{style:{color:'#e2e8f0'}},'Triple'),' / ',e('strong',{style:{color:'#e2e8f0'}},'Quad Twins'),' \u2014 identical cards (same rank+suit)',e('br'),
-        e('strong',{style:{color:'#e2e8f0'}},'Full Spectrum'),' \u2014 exactly 2 of each suit across all 8 cards',e('br'),
+        e('strong',{style:{color:'#e2e8f0'}},'Rainbow'),' — 4-card straight, each card a different suit',e('br'),
+        e('strong',{style:{color:'#e2e8f0'}},'Double Rainbow'),' — two rainbows with no rank in common',e('br'),
+        e('strong',{style:{color:'#e2e8f0'}},'Twins'),' / ',e('strong',{style:{color:'#e2e8f0'}},'Double'),' / ',e('strong',{style:{color:'#e2e8f0'}},'Triple'),' / ',e('strong',{style:{color:'#e2e8f0'}},'Quad Twins'),' — identical cards (same rank+suit); a joker can copy a card',e('br'),
+        e('strong',{style:{color:'#e2e8f0'}},'Full Spectrum'),' — exactly 2 of each suit across all 8 cards',e('br'),
         e('strong',{style:{color:'#e2e8f0'}},'All Evens'),' (2,4,6,8,10,Q) / ',e('strong',{style:{color:'#e2e8f0'}},'All Odds'),' (A,3,5,7,9,J,K)',e('br'),
-        e('strong',{style:{color:'#e2e8f0'}},'Straight Pairs'),' \u2014 consecutive ranks each with 2 cards'),
-      e('div',{style:{textAlign:'center',marginTop:10,fontSize:10,color:'#334155'}},'v30 \u00b7 Rankings determined by 500K-deal simulation \u00b7 Tap any hand for description')));
+        e('strong',{style:{color:'#e2e8f0'}},'Straight Pairs'),' — consecutive ranks each with 2 cards'),
+      e('div',{style:{textAlign:'center',marginTop:10,fontSize:10,color:'#334155'}},(ver?'v'+ver+' · ':'')+'Rankings from exact combinatorics + a '+((RANKING_META.deals||0)/1e6)+'M-deal simulation · Tap any hand for description')));
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(e(App));
 }
 
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{});}
+if(typeof React==='undefined'||typeof ReactDOM==='undefined'){
+  document.getElementById('loading').innerHTML='<span style="color:#f87171">Failed to load. Check your connection for the first launch.</span>';
+}else startApp();
+
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(()=>{});}
 </script>
 </body>
 </html>
