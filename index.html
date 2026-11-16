@@ -75,7 +75,7 @@ function classify(cards){
 
   function canG(t){const s=[...rc].sort((a,b)=>b-a);let w=j;for(let i=0;i<t.length;i++){const n=Math.max(0,t[i]-(s[i]||0));if(n>w)return false;w-=n;}return true;}
   const mFl=Math.min(cards.length,Math.max(...sc)+j);
-  function bestRun(rs){const h=new Array(14).fill(false);for(const r of rs)h[r+1]=true;if(rs.has(12))h[0]=true;for(let l=Math.min(8,cards.length);l>=5;l--)for(let st=0;st<=14-l;st++){let g=0;for(let k=0;k<l;k++)if(!h[st+k])g++;if(g<=j)return l;}return 0;}
+  function bestRun(rs){const h=new Array(14).fill(false);for(const r of rs)h[r]=true;if(rs.has(0))h[13]=true;for(let l=Math.min(8,cards.length);l>=5;l--)for(let st=0;st<=14-l;st++){let g=0;for(let k=0;k<l;k++)if(!h[st+k])g++;if(g<=j)return l;}return 0;}
   const rSet=new Set();for(let r=0;r<R;r++)if(rc[r]>0)rSet.add(r);
   const mSt=bestRun(rSet);
   let mSF=0;for(let s=0;s<S;s++)mSF=Math.max(mSF,bestRun(sr[s]));
