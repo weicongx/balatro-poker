@@ -259,6 +259,163 @@ let RANK_POS=null;
 function rankPos(type){if(!RANK_POS){RANK_POS={};RANKING.forEach((r,i)=>{RANK_POS[r[0]]=i;});}return RANK_POS[type];}
 // A hand is the highest-ranked type it qualifies for.
 function classify(cards){const f=qualifyFlags(cards);for(const r of RANKING)if(f[TI[r[0]]])return r[0];return null;}
+// ---- Tiebreaks --------------------------------------------------------------
+// Two hands of the same type compare a key of card values, high to low:
+// primary group, then secondary groups, then kickers. Ace = 14, except as the
+// bottom of an A-2-3-4-5 run, where the top card is the 5. Suits never break
+// ties. Jokers take whatever cards make the key largest; a joker that is not
+// needed for the hand plays as an ace (as a queen in All Evens).
+// Each key function returns {key, main} (main = number of non-kicker values)
+// or null when the hand does not qualify for that type.
+const val=r=>r===0?14:r+1;
+const byDesc=(a,b)=>b-a;
+const ACE=14;
+function cmpKeys(a,b){
+  const n=Math.max(a.length,b.length);
+  for(let i=0;i<n;i++){const x=i<a.length?a[i]:-1,y=i<b.length?b[i]:-1;if(x!==y)return{cmp:x>y?1:-1,at:i};}
+  return{cmp:0,at:-1};
+}
+function better(cur,cand){if(!cand)return cur;if(!cur)return cand;return cmpKeys(cand.key,cur.key).cmp>0?cand:cur;}
+function kickers(vals,jokers,jv){for(let i=0;i<jokers;i++)vals.push(jv||ACE);return vals.sort(byDesc);}
+
+// Groups of equal rank (pattern sizes largest first). Searching group values
+// from high to low, the first complete assignment is the best key.
+function groupKey(nat,j,pat){
+  const cnt=new Array(15).fill(0);for(const c of nat)cnt[val(c.r)]++;
+  const g=[];let res=null;
+  (function dfs(i,jl){
+    if(i===pat.length){
+      const left=cnt.slice();g.forEach((v,k)=>{left[v]-=Math.min(left[v],pat[k]);});
+      const kick=[];for(let v=ACE;v>=2;v--)for(let c=0;c<left[v];c++)kick.push(v);
+      res={key:g.concat(kickers(kick,jl)),main:pat.length};return;
+    }
+    const hi=i>0&&pat[i]===pat[i-1]?g[i-1]-1:ACE;   // equal-size groups: higher one first
+    for(let v=hi;v>=2&&!res;v--){
+      if(g.includes(v))continue;
+      const need=Math.max(0,pat[i]-cnt[v]);if(need>jl)continue;
+      g.push(v);dfs(i+1,jl-need);g.pop();
+    }
+  })(0,j);
+  return res;
+}
+// N-card straight (suit<0) or straight flush in `suit`: top card, then kickers.
+function runKey(nat,j,N,suit){
+  const inRun=c=>suit<0||c.s===suit;
+  const has=new Array(R).fill(false);for(const c of nat)if(inRun(c))has[c.r]=true;
+  for(let st=14-N;st>=0;st--){
+    let gaps=0;for(let k=0;k<N;k++)if(!has[POSR[st+k]])gaps++;
+    if(gaps>j)continue;
+    const use=new Array(R).fill(0);for(let k=0;k<N;k++){const r=POSR[st+k];if(has[r])use[r]=1;}
+    const kick=[];for(const c of nat){if(use[c.r]&&inRun(c)){use[c.r]=0;continue;}kick.push(val(c.r));}
+    return{key:[st+N].concat(kickers(kick,j-gaps)),main:1};
+  }
+  return null;
+}
+// N-card flush: the N best cards of the suit (jokers are aces of it), then kickers.
+function flushKey(nat,j,N){
+  let best=null;
+  for(let s=0;s<S;s++){
+    const sv=[],ov=[];for(const c of nat)(c.s===s?sv:ov).push(val(c.r));
+    if(sv.length+j<N)continue;
+    const pool=kickers(sv,j);
+    best=better(best,{key:pool.slice(0,N).concat(pool.slice(N).concat(ov).sort(byDesc)),main:N});
+  }
+  return best;
+}
+// L consecutive pairs: top rank of the run, then kickers.
+function pairsKey(nat,j,L){
+  const cnt=new Array(R).fill(0);for(const c of nat)cnt[c.r]++;
+  for(let st=14-L;st>=0;st--){
+    let d=0;for(let k=0;k<L;k++){const c=cnt[POSR[st+k]];if(c<2)d+=2-c;}
+    if(d>j)continue;
+    const take=new Array(R).fill(0);for(let k=0;k<L;k++)take[POSR[st+k]]=2;
+    const kick=[];for(const c of nat){if(take[c.r]>0){take[c.r]--;continue;}kick.push(val(c.r));}
+    return{key:[st+L].concat(kickers(kick,j-d)),main:1};
+  }
+  return null;
+}
+// Rainbow: top card of the best window, then kickers (best suit ordering).
+function rainbowKey(nat,j,rsc){
+  for(let w=WINS.length-1;w>=0;w--){
+    let best=null;
+    for(const p of P24){
+      let miss=0;const used=new Array(R*S).fill(0);
+      for(let i=0;i<4;i++){if(rsc[WINS[w][i]][p[i]]>0)used[WINS[w][i]*S+p[i]]=1;else miss++;}
+      if(miss>j)continue;
+      const kick=[];for(const c of nat){const f=c.s>=0?c.r*S+c.s:-1;if(f>=0&&used[f]){used[f]=0;continue;}kick.push(val(c.r));}
+      best=better(best,{key:[w+4].concat(kickers(kick,j-miss)),main:1});
+    }
+    if(best)return best;
+  }
+  return null;
+}
+// Double Rainbow: higher rainbow's top card, then the lower one's. The two
+// rainbows use all 8 cards, so there are no kickers.
+function dblRainbowKey(j,rsc,sc){
+  const need=rainbowNeeds(rsc,sc,j);if(!need)return null;
+  let best=null;
+  for(const[a,b]of WIN_PAIRS)if(need[a]+need[b]<=j)best=better(best,{key:[Math.max(a,b)+4,Math.min(a,b)+4],main:2});
+  return best;
+}
+// k twins: twin ranks high to low, then kickers. A twin is a natural pair of
+// identical cards, a joker copying a card held once, or two jokers (aces).
+function twinsKey(nat,j,k){
+  const fc=new Map();for(const c of nat)if(c.s>=0){const f=c.r*S+c.s;fc.set(f,(fc.get(f)||0)+1);}
+  const cand=[];
+  for(const[f,c]of fc)cand.push({f,v:val(Math.floor(f/S)),cost:c>=2?0:1,use:c>=2?2:1});
+  for(let q=0;q<j>>1;q++)cand.push({f:-1,v:ACE,cost:2,use:0});
+  let best=null;const pick=[];
+  (function rec(from,cost){
+    if(pick.length===k){
+      const tw=pick.map(x=>x.v).sort(byDesc);
+      const rm=new Map();for(const x of pick)if(x.f>=0)rm.set(x.f,x.use);
+      const kick=[];for(const c of nat){const f=c.s>=0?c.r*S+c.s:-1;if(rm.get(f)>0){rm.set(f,rm.get(f)-1);continue;}kick.push(val(c.r));}
+      best=better(best,{key:tw.concat(kickers(kick,j-cost)),main:k});return;
+    }
+    for(let i=from;i<cand.length;i++){if(cost+cand[i].cost>j)continue;pick.push(cand[i]);rec(i+1,cost+cand[i].cost);pick.pop();}
+  })(0,0);
+  return best;
+}
+
+// Tiebreak key for `cards` played as `type`, or null if it does not qualify.
+function tiebreakKey(cards,type){
+  const i=TI[type],kind=SPEC[i][1],p=SPEC[i][2];
+  const nat=cards.filter(c=>!c.j),j=cards.length-nat.length;
+  switch(kind){
+    case'group':return groupKey(nat,j,p);
+    case'straight':return runKey(nat,j,p,-1);
+    case'sflush':{let b=null;for(let s=0;s<S;s++)b=better(b,runKey(nat,j,p,s));return b;}
+    case'flush':return flushKey(nat,j,p);
+    case'pairs':return pairsKey(nat,j,p);
+    case'twins':return twinsKey(nat,j,p);
+    case'rainbow':{const st=handStats(cards);return p===1?rainbowKey(nat,j,st.rsc):dblRainbowKey(j,st.rsc,st.sc);}
+    default:{ // Full Spectrum, All Evens, All Odds, High Card: every card, high to low
+      if(!qualifyFlags(cards)[i])return null;
+      return{key:kickers(nat.map(c=>val(c.r)),j,kind==='evens'?12:ACE),main:cards.length};
+    }
+  }
+}
+function valueName(v){return v===14?'A':v===13?'K':v===12?'Q':v===11?'J':String(v);}
+// What position `at` of a key means, for the result message.
+function keyLabel(type,at,main){
+  const kind=SPEC[TI[type]][1];
+  if(at>=main)return'kicker';
+  switch(kind){
+    case'group':return['primary group','secondary group','third group','fourth group'][at];
+    case'flush':return'flush cards';
+    case'twins':return'twins';
+    case'rainbow':return SPEC[TI[type]][2]===2?(at===0?'higher rainbow':'lower rainbow'):'top card';
+    case'straight':case'sflush':case'pairs':return'top card';
+    default:return'cards';
+  }
+}
+// Showdown. winner: 1 or 2, or 0 for a split pot.
+function compareHands(a,b){
+  const typeA=classify(a),typeB=classify(b),rankA=rankPos(typeA),rankB=rankPos(typeB);
+  if(rankA!==rankB)return{winner:rankA<rankB?1:2,typeA,typeB,rankA,rankB,keyA:null,keyB:null,at:-1,label:null};
+  const ka=tiebreakKey(a,typeA),kb=tiebreakKey(b,typeB),c=cmpKeys(ka.key,kb.key);
+  return{winner:c.cmp>0?1:c.cmp<0?2:0,typeA,typeB,rankA,rankB,keyA:ka.key,keyB:kb.key,at:c.at,label:c.at>=0?keyLabel(typeA,c.at,ka.main):null};
+}
 // ===== ENGINE:END =====
 
 // ===== RANKINGS:BEGIN (generated by `node scripts/simulate.mjs --write`; do not edit by hand) =====
@@ -373,11 +530,15 @@ function App(){
 
   const n1=h1.length>0?classify(h1):null,n2=h2.length>0?classify(h2):null;
   const r1=n1?rankPos(n1):-1,r2=n2?rankPos(n2):-1;
-  let w=null,wm='';
+  let w=null,wm='',wd='';
   if(n1&&n2){
-    if(r1<r2){w=1;wm='Player 1 wins!';}
-    else if(r2<r1){w=2;wm='Player 2 wins!';}
-    else{w=0;wm='Same hand type — compare kickers!';}}
+    const res=compareHands(h1,h2);w=res.winner;
+    if(r1!==r2){wm='Player '+w+' wins!';wd=n1+' (#'+(r1+1)+') vs '+n2+' (#'+(r2+1)+')';}
+    else if(w===0){wm='Split pot';wd='Both have '+n1+' with identical ranks';}
+    else{const kw=w===1?res.keyA:res.keyB,kl=w===1?res.keyB:res.keyA,x=kw[res.at],y=kl[res.at];
+      wm='Player '+w+' wins on tiebreak';
+      wd='Both have '+n1+': '+valueName(x)+(y>=0?' beats '+valueName(y):' beats no card')+' ('+res.label+')';}
+    if(h1.length<HAND||h2.length<HAND)wd+=' · hands not complete';}
 
   return e('div',{style:{background:'#0a0a1a',color:'#e2e8f0',minHeight:'100vh',fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",padding:'20px 12px'}},
     e('div',{style:{maxWidth:480,margin:'0 auto'}},
@@ -390,8 +551,7 @@ function App(){
         w===null?e('div',{style:{fontSize:20,fontWeight:900,color:'#1e293b'}},'VS'):
         e('div',{style:{background:w===0?'rgba(234,179,8,0.1)':w===1?'rgba(168,85,247,0.12)':'rgba(56,189,248,0.12)',border:'1px solid '+(w===0?'#eab30833':w===1?'#a855f733':'#38bdf833'),borderRadius:10,padding:'10px 16px',display:'inline-block'}},
           e('div',{style:{fontSize:16,fontWeight:900,color:w===0?'#facc15':w===1?'#c084fc':'#38bdf8'}},wm),
-          w!==0&&e('div',{style:{fontSize:11,color:'#64748b',marginTop:2}},n1+' (#'+(r1+1)+') vs '+n2+' (#'+(r2+1)+')'),
-          w===0&&e('div',{style:{fontSize:11,color:'#64748b',marginTop:2}},'Both have '+n1+' — compare highest ranks, then kickers'))),
+          e('div',{style:{fontSize:11,color:'#64748b',marginTop:2}},wd))),
       e(PP,{name:'PLAYER 2',color:'#38bdf8',hand:h2,setHand:setH2,handName:n2}),
       e('button',{onClick:()=>setShowR(!showR),style:{display:'block',margin:'20px auto 0',background:'rgba(30,30,60,0.6)',border:'1px solid #1e293b',color:'#94a3b8',borderRadius:8,padding:'9px 20px',cursor:'pointer',fontSize:12,fontWeight:600}},(showR?'Hide':'Show')+' Full Rankings ('+ORDER.length+' hands)'),
       showR&&e('div',{style:{marginTop:12}},
