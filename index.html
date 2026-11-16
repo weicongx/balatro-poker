@@ -83,10 +83,12 @@ function classify(cards){
   function bestStN(n){const mx=Math.floor(cards.length/n);if(mx<2)return 0;for(let len=mx;len>=2;len--){for(let st=0;st<=R-len;st++){let d=0;for(let k=0;k<len;k++)d+=Math.max(0,n-rc[st+k]);if(d<=j)return len;}if(len<=R){const st=R-len+1;if(st>0){let d=0;for(let k=0;k<len-1;k++)d+=Math.max(0,n-rc[st+k]);d+=Math.max(0,n-rc[0]);if(d<=j)return len;}}}return 0;}
   const stP=bestStN(2);
 
-  // Twin detection
-  const twinRanks=[];
-  for(let r=0;r<R;r++)for(let s=0;s<S;s++)if(rsc[r][s]>=2)twinRanks.push(r);
-  const twinCount=twinRanks.length;
+  // Twin detection: identical cards (same rank AND suit). A joker can copy a
+  // suited card held once, and two leftover jokers can form a twin themselves.
+  let natTwins=0,singles=0;
+  for(let r=0;r<R;r++)for(let s=0;s<S;s++){if(rsc[r][s]>=2)natTwins++;else if(rsc[r][s]===1)singles++;}
+  const jCopy=Math.min(j,singles);
+  const twinCount=natTwins+jCopy+((j-jCopy)>>1);
   const hasTwins=twinCount>=1;
   const hasDblTwins=twinCount>=2;
   const hasTriTwins=twinCount>=3;
@@ -195,7 +197,7 @@ const DESCS={
   "Three Pairs":"3 non-consecutive pairs + 2 kickers",
   "2-Straight Pairs":"2 consecutive pairs + 4 kickers",
   "Two Pairs":"2 non-consecutive pairs + 4 kickers",
-  "Twins":"Pair of the exact same card \u2014 same rank AND suit",
+  "Twins":"Pair of the exact same card \u2014 same rank AND suit (a joker can copy a card)",
   "One Pair":"1 pair + 6 kickers",
   "Full Spectrum":"Exactly 2 cards in each suit (\u2660\u2665\u2666\u2663 \u00d7 2)",
   "All Evens":"Every card is even-ranked (2, 4, 6, 8, 10, Q)",
