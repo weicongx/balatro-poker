@@ -2,9 +2,6 @@
 
 A static web app that settles showdowns in a Balatro-inspired 8-card poker variant: enter two hands, and it names each hand, picks the winner and explains the tiebreak.
 
-**Live demo:** [YOUR-SITE.netlify.app](https://YOUR-SITE.netlify.app) <!-- TODO: replace with the Netlify site URL -->
-
-
 <img src="docs/screenshot.png" alt="Two hands of 4 of a Kind; Player 1 wins on tiebreak because kings beat nines" width="360">
 
 ## What the app does
