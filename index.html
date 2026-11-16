@@ -20,28 +20,10 @@ body{background:#0a0a1a;font-family:'Inter','Segoe UI',system-ui,sans-serif;colo
 </head>
 <body>
 <div id="root"><div id="loading"><div class="bar"><div class="fill"></div></div><span>Loading Balatro Poker...</span></div></div>
+<!-- React 18 UMD builds. The service worker (sw.js) caches these for offline use. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script>
-const REACT_URL='https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js';
-const RDOM_URL='https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js';
-const CACHE_NAME='balatro-v30';
-
-async function loadScript(url){
-  if('caches' in window){
-    const cache=await caches.open(CACHE_NAME);
-    let resp=await cache.match(url);
-    if(!resp){resp=await fetch(url);cache.put(url,resp.clone());}
-    const txt=await resp.text();
-    const s=document.createElement('script');s.textContent=txt;document.head.appendChild(s);
-  } else {
-    await new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});
-  }
-}
-
-(async()=>{
-  try{await loadScript(REACT_URL);await loadScript(RDOM_URL);startApp();}
-  catch(err){document.getElementById('loading').innerHTML='<span style="color:#f87171">Failed to load. Check your connection for the first launch.</span>';}
-})();
-
 // ===== ENGINE:BEGIN =====
 // Hand classification and dealing. Plain functions, no DOM or React.
 // scripts/engine.mjs extracts the text between the ENGINE markers so the
@@ -474,7 +456,7 @@ const RANKING=[
 // ===== RANKINGS:END =====
 
 function startApp(){
-const{useState}=React,e=React.createElement;
+const{useState,useEffect}=React,e=React.createElement;
 const SN=['♠','♥','♦','♣'];
 const SC=['#c8d0dc','#f87171','#60a5fa','#4ade80'];
 const SBG=['rgba(200,208,220,0.12)','rgba(248,113,113,0.12)','rgba(96,165,250,0.12)','rgba(74,222,128,0.12)'];
@@ -526,7 +508,15 @@ function PP({name,color,hand,setHand,handName}){
 
 function App(){
   const[h1,setH1]=useState([]),[h2,setH2]=useState([]);
-  const[showR,setShowR]=useState(false),[exp,setExp]=useState(null);
+  const[showR,setShowR]=useState(false),[exp,setExp]=useState(null),[ver,setVer]=useState(null);
+  // The version lives only in sw.js; ask the active worker for it.
+  useEffect(()=>{
+    const sw=navigator.serviceWorker;if(!sw)return;
+    const onMsg=ev=>{if(ev.data&&ev.data.type==='VERSION')setVer(ev.data.version);};
+    sw.addEventListener('message',onMsg);sw.startMessages();
+    sw.ready.then(reg=>{if(reg.active)reg.active.postMessage({type:'GET_VERSION'});});
+    return()=>sw.removeEventListener('message',onMsg);
+  },[]);
 
   const n1=h1.length>0?classify(h1):null,n2=h2.length>0?classify(h2):null;
   const r1=n1?rankPos(n1):-1,r2=n2?rankPos(n2):-1;
@@ -570,13 +560,17 @@ function App(){
         e('strong',{style:{color:'#e2e8f0'}},'Full Spectrum'),' — exactly 2 of each suit across all 8 cards',e('br'),
         e('strong',{style:{color:'#e2e8f0'}},'All Evens'),' (2,4,6,8,10,Q) / ',e('strong',{style:{color:'#e2e8f0'}},'All Odds'),' (A,3,5,7,9,J,K)',e('br'),
         e('strong',{style:{color:'#e2e8f0'}},'Straight Pairs'),' — consecutive ranks each with 2 cards'),
-      e('div',{style:{textAlign:'center',marginTop:10,fontSize:10,color:'#334155'}},'v30 · Rankings from exact combinatorics + a '+((RANKING_META.deals||0)/1e6)+'M-deal simulation · Tap any hand for description')));
+      e('div',{style:{textAlign:'center',marginTop:10,fontSize:10,color:'#334155'}},(ver?'v'+ver+' · ':'')+'Rankings from exact combinatorics + a '+((RANKING_META.deals||0)/1e6)+'M-deal simulation · Tap any hand for description')));
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(e(App));
 }
 
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{});}
+if(typeof React==='undefined'||typeof ReactDOM==='undefined'){
+  document.getElementById('loading').innerHTML='<span style="color:#f87171">Failed to load. Check your connection for the first launch.</span>';
+}else startApp();
+
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(()=>{});}
 </script>
 </body>
 </html>
